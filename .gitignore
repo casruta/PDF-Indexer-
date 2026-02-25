@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+dist/
+build/
+*.whl
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# PDF indexer artifacts
+.pdfindex/
+
+# OS
+.DS_Store
+Thumbs.db
+nul
+
+# MCP config (project-specific paths)
+.mcp.json
+
+# Claude
+.claude/
