@@ -1,7 +1,9 @@
-"""Flask web application for PDF table extraction and markdown export."""
+"""Flask web application for PDF table extraction and markdown/CSV export."""
 
 from __future__ import annotations
 
+import csv
+import io
 import os
 import re
 import tempfile
@@ -209,6 +211,44 @@ def generate_markdown(filename: str, extraction: dict) -> str:
     return "\n".join(lines)
 
 
+def generate_csv(extraction: dict) -> str:
+    """Generate a CSV string containing all extracted table data."""
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    # Write all tables
+    for page_info in extraction["pages"]:
+        page_num = page_info["page_number"]
+        for table_info in page_info["tables"]:
+            tnum = table_info["table_number"]
+            ttype = table_info["table_type"]
+            # Section header row
+            writer.writerow([f"--- Table {tnum} | Page {page_num} | Type: {ttype} ---"])
+            # Column headers
+            writer.writerow(table_info["headers"])
+            # Data rows
+            for typed_row in table_info["rows"]:
+                writer.writerow([cell["value"] for cell in typed_row])
+            # Blank separator
+            writer.writerow([])
+
+    # Numeric data summary section
+    if extraction["numeric_data"]:
+        writer.writerow(["--- Numeric Data Summary ---"])
+        writer.writerow(["Page", "Table", "Column", "Raw Value", "Numeric Value", "Data Type"])
+        for entry in extraction["numeric_data"]:
+            writer.writerow([
+                entry["page"],
+                entry["table"],
+                entry["header"],
+                entry["value"],
+                entry["numeric_value"],
+                entry["data_type"],
+            ])
+
+    return output.getvalue()
+
+
 def _escape_md(text: str) -> str:
     """Escape pipe characters for markdown tables."""
     if not text:
@@ -244,22 +284,34 @@ def upload():
     try:
         extraction = extract_all_tables(upload_path)
         markdown = generate_markdown(file.filename, extraction)
+        csv_content = generate_csv(extraction)
+
+        stem = Path(file.filename).stem
 
         # Save markdown output
-        md_filename = Path(file.filename).stem + "_tables.md"
+        md_filename = stem + "_tables.md"
         md_path = os.path.join(OUTPUT_FOLDER, f"{file_id}_{md_filename}")
         with open(md_path, "w", encoding="utf-8") as f:
             f.write(markdown)
+
+        # Save CSV output
+        csv_filename = stem + "_tables.csv"
+        csv_path = os.path.join(OUTPUT_FOLDER, f"{file_id}_{csv_filename}")
+        with open(csv_path, "w", encoding="utf-8", newline="") as f:
+            f.write(csv_content)
 
         return jsonify({
             "success": True,
             "file_id": file_id,
             "filename": file.filename,
             "md_filename": md_filename,
+            "csv_filename": csv_filename,
             "total_tables": extraction["total_tables"],
             "total_numeric_values": extraction["total_numeric_values"],
             "page_count": extraction["metadata"].get("page_count", "0"),
             "markdown_preview": markdown,
+            "tables": extraction["pages"],
+            "numeric_data": extraction["numeric_data"],
         })
     except Exception as e:
         return jsonify({"error": f"Failed to process PDF: {e}"}), 500
@@ -269,23 +321,28 @@ def upload():
             os.remove(upload_path)
 
 
-@app.route("/download/<file_id>/<md_filename>")
-def download(file_id: str, md_filename: str):
+@app.route("/download/<file_id>/<filename>")
+def download(file_id: str, filename: str):
     # Validate file_id format (hex chars only)
     if not re.match(r"^[a-f0-9]+$", file_id):
         return jsonify({"error": "Invalid file ID"}), 400
 
-    safe_md = re.sub(r"[^\w.\-]", "_", md_filename)
-    md_path = os.path.join(OUTPUT_FOLDER, f"{file_id}_{safe_md}")
+    safe_name = re.sub(r"[^\w.\-]", "_", filename)
+    file_path = os.path.join(OUTPUT_FOLDER, f"{file_id}_{safe_name}")
 
-    if not os.path.exists(md_path):
+    if not os.path.exists(file_path):
         return jsonify({"error": "File not found"}), 404
 
+    if filename.endswith(".csv"):
+        mimetype = "text/csv"
+    else:
+        mimetype = "text/markdown"
+
     return send_file(
-        md_path,
+        file_path,
         as_attachment=True,
-        download_name=md_filename,
-        mimetype="text/markdown",
+        download_name=filename,
+        mimetype=mimetype,
     )
 
 

@@ -14,6 +14,7 @@ from pdf_indexer.webapp import (
     app,
     extract_all_tables,
     generate_markdown,
+    generate_csv,
     _escape_md,
 )
 
@@ -301,6 +302,9 @@ class TestUploadRoute:
         assert "file_id" in data
         assert "markdown_preview" in data
         assert data["md_filename"] == "test_sample_tables.md"
+        assert data["csv_filename"] == "test_sample_tables.csv"
+        assert "tables" in data
+        assert "numeric_data" in data
         assert "# PDF Table Extraction Report" in data["markdown_preview"]
 
     def test_upload_cleans_up_pdf(self, client, sample_pdf):
@@ -326,8 +330,7 @@ class TestDownloadRoute:
         resp = client.get("/download/abcdef123456/missing.md")
         assert resp.status_code == 404
 
-    def test_download_after_upload(self, client, sample_pdf):
-        # Upload first
+    def test_download_md_after_upload(self, client, sample_pdf):
         with open(sample_pdf, "rb") as f:
             resp = client.post("/upload", data={
                 "pdf_file": (f, "download_test.pdf"),
@@ -337,10 +340,83 @@ class TestDownloadRoute:
         file_id = data["file_id"]
         md_filename = data["md_filename"]
 
-        # Now download
         resp = client.get(f"/download/{file_id}/{md_filename}")
         assert resp.status_code == 200
         assert b"# PDF Table Extraction Report" in resp.data
+
+    def test_download_csv_after_upload(self, client, sample_pdf):
+        with open(sample_pdf, "rb") as f:
+            resp = client.post("/upload", data={
+                "pdf_file": (f, "csv_test.pdf"),
+            }, content_type="multipart/form-data")
+
+        data = json.loads(resp.data)
+        file_id = data["file_id"]
+        csv_filename = data["csv_filename"]
+
+        resp = client.get(f"/download/{file_id}/{csv_filename}")
+        assert resp.status_code == 200
+        # CSV should be non-empty
+        assert len(resp.data) > 0
+
+
+# ---------------------------------------------------------------------------
+# Unit tests for CSV generation
+# ---------------------------------------------------------------------------
+
+
+class TestGenerateCsv:
+    def test_csv_with_tables(self):
+        extraction = {
+            "pages": [{
+                "page_number": 1,
+                "tables": [{
+                    "table_number": 1,
+                    "headers": ["Name", "Amount"],
+                    "rows": [
+                        [{"value": "Item A", "data_type": "text", "numeric_value": None},
+                         {"value": "$500", "data_type": "currency", "numeric_value": 500.0}],
+                    ],
+                    "row_count": 1,
+                    "col_count": 2,
+                    "table_type": "financial",
+                }],
+            }],
+            "numeric_data": [{
+                "page": 1, "table": 1, "header": "Amount",
+                "value": "$500", "numeric_value": 500.0, "data_type": "currency",
+            }],
+        }
+        csv_out = generate_csv(extraction)
+        assert "Name" in csv_out
+        assert "Amount" in csv_out
+        assert "Item A" in csv_out
+        assert "$500" in csv_out
+        assert "Numeric Data Summary" in csv_out
+
+    def test_csv_empty(self):
+        extraction = {"pages": [], "numeric_data": []}
+        csv_out = generate_csv(extraction)
+        assert csv_out == "" or csv_out.strip() == ""
+
+    def test_csv_no_numeric(self):
+        extraction = {
+            "pages": [{
+                "page_number": 1,
+                "tables": [{
+                    "table_number": 1,
+                    "headers": ["A"],
+                    "rows": [[{"value": "text", "data_type": "text", "numeric_value": None}]],
+                    "row_count": 1,
+                    "col_count": 1,
+                    "table_type": "general",
+                }],
+            }],
+            "numeric_data": [],
+        }
+        csv_out = generate_csv(extraction)
+        assert "Table 1" in csv_out
+        assert "Numeric Data Summary" not in csv_out
 
 
 # ---------------------------------------------------------------------------
