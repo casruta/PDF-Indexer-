@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF Table Extractor</title>
+    <style>
+        /* ── Design tokens ─────────────────────────────────────── */
+        :root {
+            --bg:            #0b0d13;
+            --surface:       #151820;
+            --surface-2:     #1c2030;
+            --surface-hover: #232840;
+            --border:        #282d42;
+            --border-light:  #353b56;
+            --text:          #e4e6f0;
+            --text-muted:    #7a7f99;
+            --text-dim:      #555a72;
+            --accent:        #6c72cb;
+            --accent-hover:  #858ae0;
+            --accent-glow:   rgba(108,114,203,0.15);
+            --green:         #4caf82;
+            --green-hover:   #5cc492;
+            --orange:        #e09b52;
+            --red:           #e05252;
+            --red-bg:        rgba(224,82,82,0.08);
+            --cyan:          #52bfe0;
+            --radius:        10px;
+            --radius-sm:     6px;
+            --shadow:        0 2px 12px rgba(0,0,0,0.25);
+            --mono:          'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+        }
+
+        /* ── Reset & base ──────────────────────────────────────── */
+        *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            -webkit-font-smoothing: antialiased;
+        }
+        a { color: var(--accent); text-decoration: none; }
+
+        /* ── Header ────────────────────────────────────────────── */
+        header {
+            width: 100%;
+            padding: 1rem 2rem;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            background: var(--surface);
+        }
+        header h1 { font-size: 1.15rem; font-weight: 600; letter-spacing: -0.01em; }
+        .badge {
+            font-size: 0.65rem;
+            background: var(--accent);
+            color: #fff;
+            padding: 0.15rem 0.55rem;
+            border-radius: 20px;
+            font-weight: 600;
+            letter-spacing: 0.03em;
+        }
+
+        /* ── Layout ────────────────────────────────────────────── */
+        main {
+            width: 100%;
+            max-width: 1060px;
+            margin: 0 auto;
+            padding: 2rem 1.5rem;
+            flex: 1;
+        }
+
+        /* ── Upload zone ───────────────────────────────────────── */
+        .upload-zone {
+            border: 2px dashed var(--border);
+            border-radius: var(--radius);
+            padding: 3.5rem 2rem;
+            text-align: center;
+            cursor: pointer;
+            transition: border-color 0.2s, background 0.2s, box-shadow 0.2s;
+            position: relative;
+        }
+        .upload-zone:hover, .upload-zone.drag-over {
+            border-color: var(--accent);
+            background: var(--accent-glow);
+            box-shadow: 0 0 0 4px var(--accent-glow);
+        }
+        .upload-zone input[type="file"] {
+            position: absolute; inset: 0; opacity: 0; cursor: pointer;
+        }
+        .upload-icon {
+            width: 56px; height: 56px;
+            margin: 0 auto 1.25rem;
+            background: var(--surface-2);
+            border: 1px solid var(--border);
+            border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+        }
+        .upload-icon svg {
+            width: 26px; height: 26px; stroke: var(--accent); fill: none;
+            stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
+        }
+        .upload-zone h2 { font-size: 1.1rem; font-weight: 500; margin-bottom: 0.4rem; }
+        .upload-zone p { font-size: 0.85rem; color: var(--text-muted); }
+        .upload-zone .formats {
+            margin-top: 0.75rem; font-size: 0.75rem; color: var(--text-dim);
+        }
+
+        /* ── File info bar ─────────────────────────────────────── */
+        .file-info {
+            display: none; align-items: center; gap: 1rem;
+            margin-top: 1.5rem; padding: 0.85rem 1.25rem;
+            background: var(--surface); border-radius: var(--radius);
+            border: 1px solid var(--border);
+        }
+        .file-info.visible { display: flex; }
+        .file-icon { color: var(--red); font-size: 1.3rem; flex-shrink: 0; }
+        .file-info .name {
+            flex: 1; font-size: 0.88rem; font-weight: 500;
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }
+        .file-info .size { font-size: 0.78rem; color: var(--text-muted); white-space: nowrap; }
+
+        /* ── Buttons ───────────────────────────────────────────── */
+        .btn {
+            display: inline-flex; align-items: center; gap: 0.4rem;
+            padding: 0.55rem 1.3rem; border-radius: 8px;
+            border: none; font-size: 0.82rem; font-weight: 500;
+            cursor: pointer; transition: background 0.15s, opacity 0.15s;
+            white-space: nowrap;
+        }
+        .btn svg { width: 15px; height: 15px; flex-shrink: 0; }
+        .btn-primary { background: var(--accent); color: #fff; }
+        .btn-primary:hover { background: var(--accent-hover); }
+        .btn-primary:disabled { opacity: 0.45; cursor: not-allowed; }
+        .btn-green { background: var(--green); color: #fff; }
+        .btn-green:hover { background: var(--green-hover); }
+        .btn-outline {
+            background: transparent; color: var(--text);
+            border: 1px solid var(--border);
+        }
+        .btn-outline:hover { border-color: var(--border-light); background: var(--surface-2); }
+
+        /* ── Progress ──────────────────────────────────────────── */
+        .progress-bar { display: none; margin-top: 1.5rem; }
+        .progress-bar.visible { display: block; }
+        .progress-track {
+            height: 3px; background: var(--border); border-radius: 2px; overflow: hidden;
+        }
+        .progress-fill {
+            height: 100%; background: linear-gradient(90deg, var(--accent), var(--cyan));
+            border-radius: 2px; width: 0%;
+            animation: indeterminate 1.4s ease-in-out infinite;
+        }
+        @keyframes indeterminate {
+            0%   { width: 0%;  margin-left: 0; }
+            50%  { width: 55%; margin-left: 25%; }
+            100% { width: 0%;  margin-left: 100%; }
+        }
+        .progress-bar .label {
+            font-size: 0.78rem; color: var(--text-muted); margin-top: 0.6rem;
+        }
+
+        /* ── Error ─────────────────────────────────────────────── */
+        .error-msg {
+            display: none; margin-top: 1rem; padding: 0.7rem 1rem;
+            background: var(--red-bg); border: 1px solid var(--red);
+            border-radius: var(--radius); color: var(--red); font-size: 0.83rem;
+        }
+        .error-msg.visible { display: block; }
+
+        /* ── Results wrapper ───────────────────────────────────── */
+        .results { display: none; margin-top: 2rem; }
+        .results.visible { display: block; }
+
+        /* ── Stats row ─────────────────────────────────────────── */
+        .stats {
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 0.75rem; margin-bottom: 1.5rem;
+        }
+        .stat-card {
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: var(--radius); padding: 1rem 1.2rem;
+        }
+        .stat-card .label {
+            font-size: 0.68rem; color: var(--text-muted);
+            text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 0.2rem;
+        }
+        .stat-card .value { font-size: 1.6rem; font-weight: 700; }
+        .stat-card .value.accent { color: var(--accent); }
+        .stat-card .value.green { color: var(--green); }
+        .stat-card .value.orange { color: var(--orange); }
+
+        /* ── Actions bar ───────────────────────────────────────── */
+        .actions-bar {
+            display: flex; gap: 0.6rem; margin-bottom: 1.5rem; flex-wrap: wrap;
+        }
+
+        /* ── Tabs ──────────────────────────────────────────────── */
+        .tabs {
+            display: flex; gap: 0; border-bottom: 1px solid var(--border);
+            margin-bottom: 0;
+        }
+        .tab-btn {
+            padding: 0.65rem 1.2rem; font-size: 0.82rem; font-weight: 500;
+            color: var(--text-muted); background: none; border: none;
+            border-bottom: 2px solid transparent;
+            cursor: pointer; transition: color 0.15s, border-color 0.15s;
+        }
+        .tab-btn:hover { color: var(--text); }
+        .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+        .tab-panel {
+            display: none; background: var(--surface); border: 1px solid var(--border);
+            border-top: none; border-radius: 0 0 var(--radius) var(--radius);
+            padding: 1.25rem; max-height: 600px; overflow-y: auto;
+        }
+        .tab-panel.active { display: block; }
+
+        /* scrollbars */
+        .tab-panel::-webkit-scrollbar { width: 5px; }
+        .tab-panel::-webkit-scrollbar-track { background: transparent; }
+        .tab-panel::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+        /* ── Rendered tables ───────────────────────────────────── */
+        .table-section { margin-bottom: 1.75rem; }
+        .table-section:last-child { margin-bottom: 0; }
+        .table-title {
+            font-size: 0.82rem; font-weight: 600; margin-bottom: 0.5rem;
+            color: var(--text); display: flex; align-items: center; gap: 0.5rem;
+        }
+        .table-badge {
+            font-size: 0.65rem; padding: 0.15rem 0.5rem; border-radius: 4px;
+            font-weight: 500;
+        }
+        .badge-financial { background: rgba(76,175,130,0.15); color: var(--green); }
+        .badge-statistical { background: rgba(82,191,224,0.15); color: var(--cyan); }
+        .badge-general { background: rgba(108,114,203,0.15); color: var(--accent); }
+
+        .data-table {
+            width: 100%; border-collapse: collapse; font-size: 0.78rem;
+        }
+        .data-table th {
+            text-align: left; padding: 0.55rem 0.75rem;
+            background: var(--surface-2); color: var(--text-muted);
+            border-bottom: 1px solid var(--border); font-weight: 600;
+            font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em;
+            position: sticky; top: 0; z-index: 1;
+        }
+        .data-table td {
+            padding: 0.45rem 0.75rem; border-bottom: 1px solid var(--border);
+            color: var(--text);
+        }
+        .data-table tbody tr:hover { background: var(--surface-hover); }
+        .data-table .cell-currency { color: var(--green); font-weight: 500; }
+        .data-table .cell-percent { color: var(--cyan); }
+        .data-table .cell-number { color: var(--orange); }
+        .data-table .cell-negative { color: var(--red); }
+
+        .table-overflow { overflow-x: auto; border-radius: var(--radius-sm); }
+
+        /* ── Markdown raw view ─────────────────────────────────── */
+        .md-raw {
+            white-space: pre-wrap; font-family: var(--mono);
+            font-size: 0.78rem; line-height: 1.7; color: var(--text-muted);
+        }
+
+        /* ── Empty state ───────────────────────────────────────── */
+        .empty-state {
+            text-align: center; padding: 2rem; color: var(--text-muted);
+            font-size: 0.85rem;
+        }
+
+        /* ── Footer ────────────────────────────────────────────── */
+        footer {
+            width: 100%; padding: 1.25rem 2rem; text-align: center;
+            font-size: 0.72rem; color: var(--text-dim);
+            border-top: 1px solid var(--border); background: var(--surface);
+        }
+
+        /* ── Responsive ────────────────────────────────────────── */
+        @media (max-width: 640px) {
+            main { padding: 1.25rem 1rem; }
+            .upload-zone { padding: 2.5rem 1.25rem; }
+            .stats { grid-template-columns: 1fr 1fr; }
+            .actions-bar { flex-direction: column; }
+            .actions-bar .btn { width: 100%; justify-content: center; }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--accent)"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+        <h1>PDF Table Extractor</h1>
+        <span class="badge">v2.0</span>
+    </header>
+
+    <main>
+        <!-- Upload -->
+        <div class="upload-zone" id="uploadZone">
+            <input type="file" id="fileInput" accept=".pdf">
+            <div class="upload-icon">
+                <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            </div>
+            <h2>Drop a PDF here or click to browse</h2>
+            <p>Extracts all tables and numeric data into downloadable Markdown and CSV files</p>
+            <div class="formats">Accepted: .pdf up to 50 MB</div>
+        </div>
+
+        <div class="file-info" id="fileInfo">
+            <span class="file-icon">&#128196;</span>
+            <span class="name" id="fileName"></span>
+            <span class="size" id="fileSize"></span>
+            <button class="btn btn-primary" id="extractBtn">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                Extract Tables
+            </button>
+        </div>
+
+        <div class="progress-bar" id="progressBar">
+            <div class="progress-track"><div class="progress-fill"></div></div>
+            <div class="label">Extracting tables and numeric data from all pages...</div>
+        </div>
+
+        <div class="error-msg" id="errorMsg"></div>
+
+        <!-- Results -->
+        <div class="results" id="results">
+            <div class="stats">
+                <div class="stat-card">
+                    <div class="label">Pages Scanned</div>
+                    <div class="value" id="statPages">0</div>
+                </div>
+                <div class="stat-card">
+                    <div class="label">Tables Found</div>
+                    <div class="value accent" id="statTables">0</div>
+                </div>
+                <div class="stat-card">
+                    <div class="label">Numeric Values</div>
+                    <div class="value green" id="statNumeric">0</div>
+                </div>
+                <div class="stat-card">
+                    <div class="label">Data Types</div>
+                    <div class="value orange" id="statTypes">0</div>
+                </div>
+            </div>
+
+            <div class="actions-bar">
+                <a class="btn btn-green" id="downloadMdBtn" href="#">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    Download Markdown
+                </a>
+                <a class="btn btn-primary" id="downloadCsvBtn" href="#">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    Download CSV
+                </a>
+                <button class="btn btn-outline" id="resetBtn">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/></svg>
+                    Extract Another PDF
+                </button>
+            </div>
+
+            <!-- Tabbed output -->
+            <div class="tabs" role="tablist">
+                <button class="tab-btn active" data-tab="tables" role="tab" aria-selected="true">Tables</button>
+                <button class="tab-btn" data-tab="numeric" role="tab">Numeric Data</button>
+                <button class="tab-btn" data-tab="markdown" role="tab">Markdown Source</button>
+            </div>
+
+            <div class="tab-panel active" id="panel-tables" role="tabpanel"></div>
+            <div class="tab-panel" id="panel-numeric" role="tabpanel"></div>
+            <div class="tab-panel" id="panel-markdown" role="tabpanel">
+                <div class="md-raw" id="mdRaw"></div>
+            </div>
+        </div>
+    </main>
+
+    <footer>
+        PDF Table Extractor &mdash; Built on pdf-indexer with pdfplumber
+    </footer>
+
+    <script>
+    (() => {
+        /* ── DOM refs ──────────────────────────────────────────── */
+        const $ = id => document.getElementById(id);
+        const fileInput    = $('fileInput');
+        const uploadZone   = $('uploadZone');
+        const fileInfo     = $('fileInfo');
+        const fileName     = $('fileName');
+        const fileSize     = $('fileSize');
+        const extractBtn   = $('extractBtn');
+        const progressBar  = $('progressBar');
+        const errorMsg     = $('errorMsg');
+        const results      = $('results');
+        const downloadMd   = $('downloadMdBtn');
+        const downloadCsv  = $('downloadCsvBtn');
+        const resetBtn     = $('resetBtn');
+        const panelTables  = $('panel-tables');
+        const panelNumeric = $('panel-numeric');
+        const mdRaw        = $('mdRaw');
+
+        let selectedFile = null;
+
+        /* ── Helpers ───────────────────────────────────────────── */
+        const fmtSize = b => {
+            if (b < 1024) return b + ' B';
+            if (b < 1048576) return (b / 1024).toFixed(1) + ' KB';
+            return (b / 1048576).toFixed(1) + ' MB';
+        };
+        const esc = s => {
+            const d = document.createElement('div');
+            d.textContent = s || '';
+            return d.innerHTML;
+        };
+        const show  = el => el.classList.add('visible');
+        const hide  = el => el.classList.remove('visible');
+        const showError = msg => { errorMsg.textContent = msg; show(errorMsg); };
+        const hideError = () => hide(errorMsg);
+
+        /* ── Tabs ──────────────────────────────────────────────── */
+        document.querySelectorAll('.tab-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.tab-btn').forEach(b => {
+                    b.classList.remove('active');
+                    b.setAttribute('aria-selected', 'false');
+                });
+                document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+                btn.classList.add('active');
+                btn.setAttribute('aria-selected', 'true');
+                document.getElementById('panel-' + btn.dataset.tab).classList.add('active');
+            });
+        });
+
+        /* ── Upload / drag-drop ────────────────────────────────── */
+        uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.classList.add('drag-over'); });
+        uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('drag-over'));
+        uploadZone.addEventListener('drop', e => {
+            e.preventDefault(); uploadZone.classList.remove('drag-over');
+            if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+        });
+        fileInput.addEventListener('change', () => {
+            if (fileInput.files.length) handleFile(fileInput.files[0]);
+        });
+
+        function handleFile(file) {
+            hideError(); hide(results);
+            if (!file.name.toLowerCase().endsWith('.pdf')) { showError('Please select a PDF file.'); return; }
+            selectedFile = file;
+            fileName.textContent = file.name;
+            fileSize.textContent = fmtSize(file.size);
+            show(fileInfo);
+        }
+
+        function resetUI() {
+            selectedFile = null; fileInput.value = '';
+            hide(fileInfo); hide(progressBar); hide(results);
+            uploadZone.style.display = ''; hideError();
+            // reset tabs to first
+            document.querySelector('.tab-btn').click();
+        }
+
+        /* ── Table badge class ─────────────────────────────────── */
+        function badgeClass(type) {
+            if (type === 'financial')   return 'badge-financial';
+            if (type === 'statistical') return 'badge-statistical';
+            return 'badge-general';
+        }
+
+        /* ── Cell styling by data type ─────────────────────────── */
+        function cellClass(cell) {
+            if (cell.data_type === 'currency') {
+                return cell.value && cell.value.includes('(') ? 'cell-negative' : 'cell-currency';
+            }
+            if (cell.data_type === 'percent') {
+                return cell.value && cell.value.includes('(') ? 'cell-negative' : 'cell-percent';
+            }
+            if (cell.data_type === 'number') return 'cell-number';
+            return '';
+        }
+
+        /* ── Render extracted tables ───────────────────────────── */
+        function renderTables(pages) {
+            if (!pages.length) {
+                panelTables.innerHTML = '<div class="empty-state">No tables were detected in this PDF.</div>';
+                return;
+            }
+            let html = '';
+            for (const pg of pages) {
+                for (const tbl of pg.tables) {
+                    html += `<div class="table-section">`;
+                    html += `<div class="table-title">Table ${tbl.table_number} <span class="text-dim" style="color:var(--text-muted);font-weight:400">Page ${pg.page_number}</span>`;
+                    html += ` <span class="table-badge ${badgeClass(tbl.table_type)}">${esc(tbl.table_type)}</span>`;
+                    html += `</div>`;
+                    html += `<div class="table-overflow"><table class="data-table"><thead><tr>`;
+                    for (const h of tbl.headers) html += `<th>${esc(h)}</th>`;
+                    html += `</tr></thead><tbody>`;
+                    for (const row of tbl.rows) {
+                        html += '<tr>';
+                        for (let i = 0; i < tbl.headers.length; i++) {
+                            const cell = row[i] || {value:'', data_type:'text'};
+                            const cls = cellClass(cell);
+                            html += `<td${cls ? ' class="'+cls+'"' : ''}>${esc(cell.value)}</td>`;
+                        }
+                        html += '</tr>';
+                    }
+                    html += `</tbody></table></div></div>`;
+                }
+            }
+            panelTables.innerHTML = html;
+        }
+
+        /* ── Render numeric summary ────────────────────────────── */
+        function renderNumeric(numeric) {
+            if (!numeric.length) {
+                panelNumeric.innerHTML = '<div class="empty-state">No numeric data was found in the extracted tables.</div>';
+                return;
+            }
+            let html = '<div class="table-overflow"><table class="data-table"><thead><tr>';
+            html += '<th>Page</th><th>Table</th><th>Column</th><th>Raw Value</th><th>Numeric</th><th>Type</th>';
+            html += '</tr></thead><tbody>';
+            for (const e of numeric) {
+                const cls = e.data_type === 'currency' ? 'cell-currency'
+                          : e.data_type === 'percent'  ? 'cell-percent'
+                          : e.data_type === 'number'   ? 'cell-number' : '';
+                html += `<tr>`;
+                html += `<td>${e.page}</td><td>${e.table}</td>`;
+                html += `<td>${esc(e.header)}</td>`;
+                html += `<td class="${cls}">${esc(e.value)}</td>`;
+                html += `<td>${e.numeric_value}</td>`;
+                html += `<td><span class="table-badge ${e.data_type==='currency'?'badge-financial':e.data_type==='percent'?'badge-statistical':'badge-general'}">${e.data_type}</span></td>`;
+                html += `</tr>`;
+            }
+            html += '</tbody></table></div>';
+            panelNumeric.innerHTML = html;
+        }
+
+        /* ── Extract action ────────────────────────────────────── */
+        extractBtn.addEventListener('click', async () => {
+            if (!selectedFile) return;
+            hideError();
+            extractBtn.disabled = true;
+            show(progressBar);
+            hide(results);
+
+            const fd = new FormData();
+            fd.append('pdf_file', selectedFile);
+
+            try {
+                const resp = await fetch('/upload', { method: 'POST', body: fd });
+                const data = await resp.json();
+                if (!resp.ok || data.error) { showError(data.error || 'Upload failed'); return; }
+
+                // Stats
+                $('statPages').textContent   = data.page_count;
+                $('statTables').textContent  = data.total_tables;
+                $('statNumeric').textContent = data.total_numeric_values;
+
+                // Count distinct data types
+                const types = new Set(data.numeric_data.map(e => e.data_type));
+                $('statTypes').textContent = types.size;
+
+                // Download links
+                downloadMd.href  = '/download/' + data.file_id + '/' + encodeURIComponent(data.md_filename);
+                downloadCsv.href = '/download/' + data.file_id + '/' + encodeURIComponent(data.csv_filename);
+
+                // Render panels
+                renderTables(data.tables);
+                renderNumeric(data.numeric_data);
+                mdRaw.textContent = data.markdown_preview;
+
+                uploadZone.style.display = 'none';
+                hide(fileInfo);
+                show(results);
+            } catch (err) {
+                showError('Network error: ' + err.message);
+            } finally {
+                hide(progressBar);
+                extractBtn.disabled = false;
+            }
+        });
+
+        resetBtn.addEventListener('click', resetUI);
+    })();
+    </script>
+</body>
+</html>
