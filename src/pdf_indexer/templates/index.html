@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF Table Extractor</title>
+    <style>
+        :root {
+            --bg: #0f1117;
+            --surface: #1a1d27;
+            --surface-hover: #22263a;
+            --border: #2d3148;
+            --text: #e4e6f0;
+            --text-muted: #8b8fa3;
+            --accent: #6c72cb;
+            --accent-hover: #7f84d8;
+            --success: #4caf82;
+            --error: #e05252;
+            --radius: 10px;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        header {
+            width: 100%;
+            padding: 1.5rem 2rem;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        header h1 {
+            font-size: 1.25rem;
+            font-weight: 600;
+        }
+
+        header .badge {
+            font-size: 0.7rem;
+            background: var(--accent);
+            color: #fff;
+            padding: 0.15rem 0.5rem;
+            border-radius: 20px;
+            font-weight: 500;
+        }
+
+        main {
+            width: 100%;
+            max-width: 960px;
+            padding: 2rem 1.5rem;
+            flex: 1;
+        }
+
+        /* Upload area */
+        .upload-zone {
+            border: 2px dashed var(--border);
+            border-radius: var(--radius);
+            padding: 3rem 2rem;
+            text-align: center;
+            cursor: pointer;
+            transition: border-color 0.2s, background 0.2s;
+            position: relative;
+        }
+
+        .upload-zone:hover, .upload-zone.drag-over {
+            border-color: var(--accent);
+            background: rgba(108, 114, 203, 0.05);
+        }
+
+        .upload-zone input[type="file"] {
+            position: absolute;
+            inset: 0;
+            opacity: 0;
+            cursor: pointer;
+        }
+
+        .upload-icon {
+            width: 48px;
+            height: 48px;
+            margin: 0 auto 1rem;
+            background: var(--surface);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .upload-icon svg {
+            width: 24px;
+            height: 24px;
+            stroke: var(--accent);
+            fill: none;
+            stroke-width: 2;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+
+        .upload-zone h2 {
+            font-size: 1.1rem;
+            font-weight: 500;
+            margin-bottom: 0.5rem;
+        }
+
+        .upload-zone p {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }
+
+        /* File info bar */
+        .file-info {
+            display: none;
+            align-items: center;
+            gap: 1rem;
+            margin-top: 1.5rem;
+            padding: 1rem 1.25rem;
+            background: var(--surface);
+            border-radius: var(--radius);
+            border: 1px solid var(--border);
+        }
+
+        .file-info.visible { display: flex; }
+
+        .file-info .name {
+            flex: 1;
+            font-size: 0.9rem;
+            font-weight: 500;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .file-info .size {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            white-space: nowrap;
+        }
+
+        .btn {
+            padding: 0.6rem 1.4rem;
+            border-radius: 8px;
+            border: none;
+            font-size: 0.85rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .btn-primary {
+            background: var(--accent);
+            color: #fff;
+        }
+
+        .btn-primary:hover { background: var(--accent-hover); }
+
+        .btn-primary:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-download {
+            background: var(--success);
+            color: #fff;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+        }
+
+        .btn-download:hover { opacity: 0.9; }
+
+        /* Progress */
+        .progress-bar {
+            display: none;
+            margin-top: 1.5rem;
+        }
+
+        .progress-bar.visible { display: block; }
+
+        .progress-track {
+            height: 4px;
+            background: var(--border);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: var(--accent);
+            border-radius: 2px;
+            width: 0%;
+            animation: indeterminate 1.5s ease-in-out infinite;
+        }
+
+        @keyframes indeterminate {
+            0% { width: 0%; margin-left: 0; }
+            50% { width: 60%; margin-left: 20%; }
+            100% { width: 0%; margin-left: 100%; }
+        }
+
+        .progress-bar .label {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            margin-top: 0.5rem;
+        }
+
+        /* Error */
+        .error-msg {
+            display: none;
+            margin-top: 1rem;
+            padding: 0.75rem 1rem;
+            background: rgba(224, 82, 82, 0.1);
+            border: 1px solid var(--error);
+            border-radius: var(--radius);
+            color: var(--error);
+            font-size: 0.85rem;
+        }
+
+        .error-msg.visible { display: block; }
+
+        /* Results */
+        .results {
+            display: none;
+            margin-top: 2rem;
+        }
+
+        .results.visible { display: block; }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .stat-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 1rem 1.25rem;
+        }
+
+        .stat-card .label {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 0.25rem;
+        }
+
+        .stat-card .value {
+            font-size: 1.5rem;
+            font-weight: 600;
+        }
+
+        .results h3 {
+            font-size: 1rem;
+            font-weight: 500;
+            margin-bottom: 0.75rem;
+        }
+
+        .actions-bar {
+            display: flex;
+            gap: 0.75rem;
+            margin-bottom: 1.5rem;
+            flex-wrap: wrap;
+        }
+
+        /* Markdown preview */
+        .md-preview {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 1.5rem;
+            max-height: 600px;
+            overflow-y: auto;
+            font-size: 0.82rem;
+            line-height: 1.7;
+            white-space: pre-wrap;
+            font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+        }
+
+        .md-preview::-webkit-scrollbar { width: 6px; }
+        .md-preview::-webkit-scrollbar-track { background: transparent; }
+        .md-preview::-webkit-scrollbar-thumb {
+            background: var(--border);
+            border-radius: 3px;
+        }
+
+        footer {
+            width: 100%;
+            padding: 1.5rem 2rem;
+            text-align: center;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            border-top: 1px solid var(--border);
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>PDF Table Extractor</h1>
+        <span class="badge">v1.0</span>
+    </header>
+
+    <main>
+        <div class="upload-zone" id="uploadZone">
+            <input type="file" id="fileInput" accept=".pdf">
+            <div class="upload-icon">
+                <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            </div>
+            <h2>Drop a PDF here or click to browse</h2>
+            <p>Extracts all tables and numeric data into a downloadable Markdown file</p>
+        </div>
+
+        <div class="file-info" id="fileInfo">
+            <span class="name" id="fileName"></span>
+            <span class="size" id="fileSize"></span>
+            <button class="btn btn-primary" id="extractBtn">Extract Tables</button>
+        </div>
+
+        <div class="progress-bar" id="progressBar">
+            <div class="progress-track"><div class="progress-fill"></div></div>
+            <div class="label">Extracting tables and numeric data...</div>
+        </div>
+
+        <div class="error-msg" id="errorMsg"></div>
+
+        <div class="results" id="results">
+            <div class="stats">
+                <div class="stat-card">
+                    <div class="label">Pages</div>
+                    <div class="value" id="statPages">0</div>
+                </div>
+                <div class="stat-card">
+                    <div class="label">Tables Found</div>
+                    <div class="value" id="statTables">0</div>
+                </div>
+                <div class="stat-card">
+                    <div class="label">Numeric Values</div>
+                    <div class="value" id="statNumeric">0</div>
+                </div>
+            </div>
+
+            <div class="actions-bar">
+                <a class="btn btn-download" id="downloadBtn" href="#">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    Download Markdown
+                </a>
+                <button class="btn btn-primary" id="resetBtn">Extract Another PDF</button>
+            </div>
+
+            <h3>Preview</h3>
+            <div class="md-preview" id="mdPreview"></div>
+        </div>
+    </main>
+
+    <footer>
+        PDF Table Extractor &mdash; Built on pdf-indexer with pdfplumber
+    </footer>
+
+    <script>
+        const fileInput = document.getElementById('fileInput');
+        const uploadZone = document.getElementById('uploadZone');
+        const fileInfo = document.getElementById('fileInfo');
+        const fileName = document.getElementById('fileName');
+        const fileSize = document.getElementById('fileSize');
+        const extractBtn = document.getElementById('extractBtn');
+        const progressBar = document.getElementById('progressBar');
+        const errorMsg = document.getElementById('errorMsg');
+        const results = document.getElementById('results');
+        const downloadBtn = document.getElementById('downloadBtn');
+        const resetBtn = document.getElementById('resetBtn');
+        const mdPreview = document.getElementById('mdPreview');
+
+        let selectedFile = null;
+
+        function formatSize(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        }
+
+        function showError(msg) {
+            errorMsg.textContent = msg;
+            errorMsg.classList.add('visible');
+        }
+
+        function hideError() {
+            errorMsg.classList.remove('visible');
+        }
+
+        function resetUI() {
+            selectedFile = null;
+            fileInput.value = '';
+            fileInfo.classList.remove('visible');
+            progressBar.classList.remove('visible');
+            results.classList.remove('visible');
+            uploadZone.style.display = '';
+            hideError();
+        }
+
+        // Drag & drop
+        uploadZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadZone.classList.add('drag-over');
+        });
+
+        uploadZone.addEventListener('dragleave', () => {
+            uploadZone.classList.remove('drag-over');
+        });
+
+        uploadZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadZone.classList.remove('drag-over');
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                handleFile(files[0]);
+            }
+        });
+
+        fileInput.addEventListener('change', () => {
+            if (fileInput.files.length > 0) {
+                handleFile(fileInput.files[0]);
+            }
+        });
+
+        function handleFile(file) {
+            hideError();
+            results.classList.remove('visible');
+
+            if (!file.name.toLowerCase().endsWith('.pdf')) {
+                showError('Please select a PDF file.');
+                return;
+            }
+
+            selectedFile = file;
+            fileName.textContent = file.name;
+            fileSize.textContent = formatSize(file.size);
+            fileInfo.classList.add('visible');
+        }
+
+        extractBtn.addEventListener('click', async () => {
+            if (!selectedFile) return;
+
+            hideError();
+            extractBtn.disabled = true;
+            progressBar.classList.add('visible');
+            results.classList.remove('visible');
+
+            const formData = new FormData();
+            formData.append('pdf_file', selectedFile);
+
+            try {
+                const resp = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData,
+                });
+
+                const data = await resp.json();
+
+                if (!resp.ok || data.error) {
+                    showError(data.error || 'Upload failed');
+                    return;
+                }
+
+                // Populate results
+                document.getElementById('statPages').textContent = data.page_count;
+                document.getElementById('statTables').textContent = data.total_tables;
+                document.getElementById('statNumeric').textContent = data.total_numeric_values;
+
+                downloadBtn.href = '/download/' + data.file_id + '/' + encodeURIComponent(data.md_filename);
+                mdPreview.textContent = data.markdown_preview;
+
+                uploadZone.style.display = 'none';
+                fileInfo.classList.remove('visible');
+                results.classList.add('visible');
+            } catch (err) {
+                showError('Network error: ' + err.message);
+            } finally {
+                progressBar.classList.remove('visible');
+                extractBtn.disabled = false;
+            }
+        });
+
+        resetBtn.addEventListener('click', resetUI);
+    </script>
+</body>
+</html>
