@@ -23,6 +23,12 @@ import pdfplumber
 from pdf_indexer.extractors.table_extractor import TableExtractor
 from pdf_indexer.extractors.data_typer import DataTyper
 from pdf_indexer.extractors.metadata_extractor import MetadataExtractor
+from pdf_indexer.export import (
+    generate_combined_csv,
+    generate_json_export,
+    generate_excel,
+    generate_zip_bundle,
+)
 
 UPLOAD_FOLDER = os.path.join(tempfile.gettempdir(), "pdf_indexer_uploads")
 OUTPUT_FOLDER = os.path.join(tempfile.gettempdir(), "pdf_indexer_outputs")
@@ -284,7 +290,7 @@ def upload():
     try:
         extraction = extract_all_tables(upload_path)
         markdown = generate_markdown(file.filename, extraction)
-        csv_content = generate_csv(extraction)
+        legacy_csv_content = generate_csv(extraction)
 
         stem = Path(file.filename).stem
 
@@ -294,11 +300,35 @@ def upload():
         with open(md_path, "w", encoding="utf-8") as f:
             f.write(markdown)
 
-        # Save CSV output
-        csv_filename = stem + "_tables.csv"
+        # Save tidy CSV output (replaces legacy CSV as primary download)
+        csv_filename = stem + "_tidy.csv"
         csv_path = os.path.join(OUTPUT_FOLDER, f"{file_id}_{csv_filename}")
+        tidy_csv_content = generate_combined_csv(extraction, file.filename)
         with open(csv_path, "w", encoding="utf-8", newline="") as f:
-            f.write(csv_content)
+            f.write(tidy_csv_content)
+
+        # Save structured JSON
+        json_filename = stem + "_data.json"
+        json_path = os.path.join(OUTPUT_FOLDER, f"{file_id}_{json_filename}")
+        json_content = generate_json_export(extraction, file.filename)
+        with open(json_path, "w", encoding="utf-8") as f:
+            f.write(json_content)
+
+        # Save Excel workbook
+        xlsx_filename = stem + "_tables.xlsx"
+        xlsx_path = os.path.join(OUTPUT_FOLDER, f"{file_id}_{xlsx_filename}")
+        xlsx_content = generate_excel(extraction, file.filename)
+        with open(xlsx_path, "wb") as f:
+            f.write(xlsx_content)
+
+        # Save ZIP bundle with all formats
+        zip_filename = stem + "_export.zip"
+        zip_path = os.path.join(OUTPUT_FOLDER, f"{file_id}_{zip_filename}")
+        zip_content = generate_zip_bundle(
+            extraction, file.filename, markdown, legacy_csv_content,
+        )
+        with open(zip_path, "wb") as f:
+            f.write(zip_content)
 
         return jsonify({
             "success": True,
@@ -306,6 +336,9 @@ def upload():
             "filename": file.filename,
             "md_filename": md_filename,
             "csv_filename": csv_filename,
+            "json_filename": json_filename,
+            "xlsx_filename": xlsx_filename,
+            "zip_filename": zip_filename,
             "total_tables": extraction["total_tables"],
             "total_numeric_values": extraction["total_numeric_values"],
             "page_count": extraction["metadata"].get("page_count", "0"),
@@ -333,10 +366,15 @@ def download(file_id: str, filename: str):
     if not os.path.exists(file_path):
         return jsonify({"error": "File not found"}), 404
 
-    if filename.endswith(".csv"):
-        mimetype = "text/csv"
-    else:
-        mimetype = "text/markdown"
+    mimetype_map = {
+        ".csv": "text/csv",
+        ".md": "text/markdown",
+        ".json": "application/json",
+        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ".zip": "application/zip",
+    }
+    ext = os.path.splitext(filename)[1].lower()
+    mimetype = mimetype_map.get(ext, "application/octet-stream")
 
     return send_file(
         file_path,

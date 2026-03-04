@@ -302,7 +302,10 @@ class TestUploadRoute:
         assert "file_id" in data
         assert "markdown_preview" in data
         assert data["md_filename"] == "test_sample_tables.md"
-        assert data["csv_filename"] == "test_sample_tables.csv"
+        assert data["csv_filename"] == "test_sample_tidy.csv"
+        assert data["json_filename"] == "test_sample_data.json"
+        assert data["xlsx_filename"] == "test_sample_tables.xlsx"
+        assert data["zip_filename"] == "test_sample_export.zip"
         assert "tables" in data
         assert "numeric_data" in data
         assert "# PDF Table Extraction Report" in data["markdown_preview"]
@@ -358,6 +361,55 @@ class TestDownloadRoute:
         assert resp.status_code == 200
         # CSV should be non-empty
         assert len(resp.data) > 0
+
+    def test_download_json_after_upload(self, client, sample_pdf):
+        with open(sample_pdf, "rb") as f:
+            resp = client.post("/upload", data={
+                "pdf_file": (f, "json_test.pdf"),
+            }, content_type="multipart/form-data")
+
+        data = json.loads(resp.data)
+        file_id = data["file_id"]
+        json_filename = data["json_filename"]
+
+        resp = client.get(f"/download/{file_id}/{json_filename}")
+        assert resp.status_code == 200
+        parsed = json.loads(resp.data)
+        assert "tables" in parsed
+        assert "source_file" in parsed
+
+    def test_download_xlsx_after_upload(self, client, sample_pdf):
+        with open(sample_pdf, "rb") as f:
+            resp = client.post("/upload", data={
+                "pdf_file": (f, "xlsx_test.pdf"),
+            }, content_type="multipart/form-data")
+
+        data = json.loads(resp.data)
+        file_id = data["file_id"]
+        xlsx_filename = data["xlsx_filename"]
+
+        resp = client.get(f"/download/{file_id}/{xlsx_filename}")
+        assert resp.status_code == 200
+        assert len(resp.data) > 0
+
+    def test_download_zip_after_upload(self, client, sample_pdf):
+        import zipfile as zf_mod
+
+        with open(sample_pdf, "rb") as f:
+            resp = client.post("/upload", data={
+                "pdf_file": (f, "zip_test.pdf"),
+            }, content_type="multipart/form-data")
+
+        data = json.loads(resp.data)
+        file_id = data["file_id"]
+        zip_filename = data["zip_filename"]
+
+        resp = client.get(f"/download/{file_id}/{zip_filename}")
+        assert resp.status_code == 200
+        archive = zf_mod.ZipFile(io.BytesIO(resp.data))
+        names = archive.namelist()
+        assert any("combined_tidy.csv" in n for n in names)
+        assert any("data.json" in n for n in names)
 
 
 # ---------------------------------------------------------------------------
