@@ -7,6 +7,8 @@ import io
 import os
 import re
 import tempfile
+import threading
+import time
 import uuid
 from pathlib import Path
 
@@ -37,6 +39,9 @@ UPLOAD_FOLDER = os.path.join(tempfile.gettempdir(), "pdf_indexer_uploads")
 OUTPUT_FOLDER = os.path.join(tempfile.gettempdir(), "pdf_indexer_outputs")
 DB_FOLDER = os.path.join(tempfile.gettempdir(), "pdf_indexer_db")
 
+FILE_TTL_SECONDS = 5 * 60  # Output files expire after 5 minutes
+CLEANUP_INTERVAL_SECONDS = 60  # Sweep every 60 seconds
+
 app = Flask(
     __name__,
     template_folder=os.path.join(os.path.dirname(__file__), "templates"),
@@ -48,6 +53,36 @@ def _ensure_dirs() -> None:
     os.makedirs(UPLOAD_FOLDER, exist_ok=True)
     os.makedirs(OUTPUT_FOLDER, exist_ok=True)
     os.makedirs(DB_FOLDER, exist_ok=True)
+
+
+def _cleanup_old_files() -> None:
+    """Delete output files older than FILE_TTL_SECONDS."""
+    try:
+        entries = os.listdir(OUTPUT_FOLDER)
+    except FileNotFoundError:
+        return
+
+    cutoff = time.time() - FILE_TTL_SECONDS
+    for name in entries:
+        path = os.path.join(OUTPUT_FOLDER, name)
+        try:
+            if os.path.isfile(path) and os.path.getmtime(path) < cutoff:
+                os.remove(path)
+        except OSError:
+            pass
+
+
+def _start_cleanup_thread() -> tuple[threading.Thread, threading.Event]:
+    """Start a daemon thread that periodically removes expired output files."""
+    stop_event = threading.Event()
+
+    def _loop() -> None:
+        while not stop_event.wait(CLEANUP_INTERVAL_SECONDS):
+            _cleanup_old_files()
+
+    t = threading.Thread(target=_loop, daemon=True, name="pdf-indexer-cleanup")
+    t.start()
+    return t, stop_event
 
 
 def _get_index_db_path() -> str:
@@ -523,7 +558,9 @@ def main():
     args = parser.parse_args()
 
     _ensure_dirs()
+    _start_cleanup_thread()
     print(f"Starting PDF Table Extractor at http://{args.host}:{args.port}")
+    print(f"Output files expire after {FILE_TTL_SECONDS // 60} minutes")
     app.run(host=args.host, port=args.port, debug=args.debug)
 
 
