@@ -6,6 +6,7 @@ import io
 import json
 import os
 import tempfile
+import time
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -16,6 +17,10 @@ from pdf_indexer.webapp import (
     generate_markdown,
     generate_csv,
     _escape_md,
+    _cleanup_old_files,
+    _start_cleanup_thread,
+    OUTPUT_FOLDER,
+    FILE_TTL_SECONDS,
 )
 
 
@@ -302,7 +307,10 @@ class TestUploadRoute:
         assert "file_id" in data
         assert "markdown_preview" in data
         assert data["md_filename"] == "test_sample_tables.md"
-        assert data["csv_filename"] == "test_sample_tables.csv"
+        assert data["csv_filename"] == "test_sample_tidy.csv"
+        assert data["json_filename"] == "test_sample_data.json"
+        assert data["xlsx_filename"] == "test_sample_tables.xlsx"
+        assert data["zip_filename"] == "test_sample_export.zip"
         assert "tables" in data
         assert "numeric_data" in data
         assert "# PDF Table Extraction Report" in data["markdown_preview"]
@@ -358,6 +366,55 @@ class TestDownloadRoute:
         assert resp.status_code == 200
         # CSV should be non-empty
         assert len(resp.data) > 0
+
+    def test_download_json_after_upload(self, client, sample_pdf):
+        with open(sample_pdf, "rb") as f:
+            resp = client.post("/upload", data={
+                "pdf_file": (f, "json_test.pdf"),
+            }, content_type="multipart/form-data")
+
+        data = json.loads(resp.data)
+        file_id = data["file_id"]
+        json_filename = data["json_filename"]
+
+        resp = client.get(f"/download/{file_id}/{json_filename}")
+        assert resp.status_code == 200
+        parsed = json.loads(resp.data)
+        assert "tables" in parsed
+        assert "source_file" in parsed
+
+    def test_download_xlsx_after_upload(self, client, sample_pdf):
+        with open(sample_pdf, "rb") as f:
+            resp = client.post("/upload", data={
+                "pdf_file": (f, "xlsx_test.pdf"),
+            }, content_type="multipart/form-data")
+
+        data = json.loads(resp.data)
+        file_id = data["file_id"]
+        xlsx_filename = data["xlsx_filename"]
+
+        resp = client.get(f"/download/{file_id}/{xlsx_filename}")
+        assert resp.status_code == 200
+        assert len(resp.data) > 0
+
+    def test_download_zip_after_upload(self, client, sample_pdf):
+        import zipfile as zf_mod
+
+        with open(sample_pdf, "rb") as f:
+            resp = client.post("/upload", data={
+                "pdf_file": (f, "zip_test.pdf"),
+            }, content_type="multipart/form-data")
+
+        data = json.loads(resp.data)
+        file_id = data["file_id"]
+        zip_filename = data["zip_filename"]
+
+        resp = client.get(f"/download/{file_id}/{zip_filename}")
+        assert resp.status_code == 200
+        archive = zf_mod.ZipFile(io.BytesIO(resp.data))
+        names = archive.namelist()
+        assert any("combined_tidy.csv" in n for n in names)
+        assert any("data.json" in n for n in names)
 
 
 # ---------------------------------------------------------------------------
@@ -457,3 +514,61 @@ class TestIntegrationRoundTrip:
                 l for l in lines if l.startswith("|") and "---" in l
             ]
             assert len(table_header_lines) > 0, "Expected markdown table separator rows"
+
+
+# ---------------------------------------------------------------------------
+# Tests for automatic file cleanup
+# ---------------------------------------------------------------------------
+
+
+class TestFileCleanup:
+    @pytest.fixture(autouse=True)
+    def _setup_output_dir(self, tmp_path):
+        """Redirect OUTPUT_FOLDER to a temp dir for isolation."""
+        self._orig = OUTPUT_FOLDER
+        import pdf_indexer.webapp as _mod
+
+        _mod.OUTPUT_FOLDER = str(tmp_path)
+        self.output_dir = str(tmp_path)
+        yield
+        _mod.OUTPUT_FOLDER = self._orig
+
+    def test_cleanup_deletes_old_files(self):
+        """Files older than TTL should be deleted."""
+        old_file = os.path.join(self.output_dir, "abc123_report.csv")
+        with open(old_file, "w") as f:
+            f.write("data")
+
+        # Set mtime to 10 minutes ago
+        old_time = time.time() - 600
+        os.utime(old_file, (old_time, old_time))
+
+        _cleanup_old_files()
+
+        assert not os.path.exists(old_file)
+
+    def test_cleanup_preserves_recent_files(self):
+        """Files younger than TTL should be kept."""
+        new_file = os.path.join(self.output_dir, "def456_report.csv")
+        with open(new_file, "w") as f:
+            f.write("data")
+
+        _cleanup_old_files()
+
+        assert os.path.exists(new_file)
+
+    def test_cleanup_handles_missing_directory(self):
+        """Should not raise if OUTPUT_FOLDER does not exist."""
+        import pdf_indexer.webapp as _mod
+
+        _mod.OUTPUT_FOLDER = "/tmp/nonexistent_pdf_indexer_test_dir"
+        _cleanup_old_files()  # Should not raise
+
+    def test_cleanup_thread_starts_and_stops(self):
+        """Thread should start and stop cleanly via stop event."""
+        thread, stop_event = _start_cleanup_thread()
+        assert thread.is_alive()
+
+        stop_event.set()
+        thread.join(timeout=5)
+        assert not thread.is_alive()

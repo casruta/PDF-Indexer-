@@ -349,13 +349,25 @@
             </div>
 
             <div class="actions-bar">
-                <a class="btn btn-green" id="downloadMdBtn" href="#">
+                <a class="btn btn-green" id="downloadZipBtn" href="#">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                    Download Markdown
+                    Download All (ZIP)
+                </a>
+                <a class="btn btn-primary" id="downloadXlsxBtn" href="#">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    Excel
                 </a>
                 <a class="btn btn-primary" id="downloadCsvBtn" href="#">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                    Download CSV
+                    CSV (Tidy)
+                </a>
+                <a class="btn btn-outline" id="downloadJsonBtn" href="#">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    JSON
+                </a>
+                <a class="btn btn-outline" id="downloadMdBtn" href="#">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    Markdown
                 </a>
                 <button class="btn btn-outline" id="resetBtn">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/></svg>
@@ -397,6 +409,9 @@
         const results      = $('results');
         const downloadMd   = $('downloadMdBtn');
         const downloadCsv  = $('downloadCsvBtn');
+        const downloadZip  = $('downloadZipBtn');
+        const downloadXlsx = $('downloadXlsxBtn');
+        const downloadJson = $('downloadJsonBtn');
         const resetBtn     = $('resetBtn');
         const panelTables  = $('panel-tables');
         const panelNumeric = $('panel-numeric');
@@ -563,8 +578,11 @@
                 $('statTypes').textContent = types.size;
 
                 // Download links
-                downloadMd.href  = '/download/' + data.file_id + '/' + encodeURIComponent(data.md_filename);
-                downloadCsv.href = '/download/' + data.file_id + '/' + encodeURIComponent(data.csv_filename);
+                downloadMd.href   = '/download/' + data.file_id + '/' + encodeURIComponent(data.md_filename);
+                downloadCsv.href  = '/download/' + data.file_id + '/' + encodeURIComponent(data.csv_filename);
+                downloadZip.href  = '/download/' + data.file_id + '/' + encodeURIComponent(data.zip_filename);
+                downloadXlsx.href = '/download/' + data.file_id + '/' + encodeURIComponent(data.xlsx_filename);
+                downloadJson.href = '/download/' + data.file_id + '/' + encodeURIComponent(data.json_filename);
 
                 // Render panels
                 renderTables(data.tables);

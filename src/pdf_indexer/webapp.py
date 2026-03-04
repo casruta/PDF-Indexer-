@@ -7,6 +7,8 @@ import io
 import os
 import re
 import tempfile
+import threading
+import time
 import uuid
 from pathlib import Path
 
@@ -23,9 +25,22 @@ import pdfplumber
 from pdf_indexer.extractors.table_extractor import TableExtractor
 from pdf_indexer.extractors.data_typer import DataTyper
 from pdf_indexer.extractors.metadata_extractor import MetadataExtractor
+from pdf_indexer.export import (
+    generate_combined_csv,
+    generate_json_export,
+    generate_excel,
+    generate_zip_bundle,
+)
+from pdf_indexer.models import CellData, DocumentRecord, PageRecord, TableData
+from pdf_indexer.database import PDFDatabase
+from pdf_indexer.scanner import compute_file_hash
 
 UPLOAD_FOLDER = os.path.join(tempfile.gettempdir(), "pdf_indexer_uploads")
 OUTPUT_FOLDER = os.path.join(tempfile.gettempdir(), "pdf_indexer_outputs")
+DB_FOLDER = os.path.join(tempfile.gettempdir(), "pdf_indexer_db")
+
+FILE_TTL_SECONDS = 5 * 60  # Output files expire after 5 minutes
+CLEANUP_INTERVAL_SECONDS = 60  # Sweep every 60 seconds
 
 app = Flask(
     __name__,
@@ -37,12 +52,152 @@ app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB limit
 def _ensure_dirs() -> None:
     os.makedirs(UPLOAD_FOLDER, exist_ok=True)
     os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+    os.makedirs(DB_FOLDER, exist_ok=True)
+
+
+def _cleanup_old_files() -> None:
+    """Delete output files older than FILE_TTL_SECONDS."""
+    try:
+        entries = os.listdir(OUTPUT_FOLDER)
+    except FileNotFoundError:
+        return
+
+    cutoff = time.time() - FILE_TTL_SECONDS
+    for name in entries:
+        path = os.path.join(OUTPUT_FOLDER, name)
+        try:
+            if os.path.isfile(path) and os.path.getmtime(path) < cutoff:
+                os.remove(path)
+        except OSError:
+            pass
+
+
+def _start_cleanup_thread() -> tuple[threading.Thread, threading.Event]:
+    """Start a daemon thread that periodically removes expired output files."""
+    stop_event = threading.Event()
+
+    def _loop() -> None:
+        while not stop_event.wait(CLEANUP_INTERVAL_SECONDS):
+            _cleanup_old_files()
+
+    t = threading.Thread(target=_loop, daemon=True, name="pdf-indexer-cleanup")
+    t.start()
+    return t, stop_event
+
+
+def _get_index_db_path() -> str:
+    """Return path to the shared SQLite index database."""
+    return os.path.join(DB_FOLDER, "web_index.db")
+
+
+def _persist_to_index(
+    pdf_path: str,
+    filename: str,
+    extraction: dict,
+) -> None:
+    """Persist extraction results to the SQLite index database.
+
+    This bridges the web app and the MCP server — once a PDF is uploaded
+    and processed, its data becomes immediately queryable via MCP tools.
+    Set PDF_INDEX_DB to the web_index.db path in the MCP server config.
+    """
+    db_path = _get_index_db_path()
+    db = PDFDatabase(db_path)
+    typer = DataTyper()
+
+    try:
+        content_hash = compute_file_hash(pdf_path)
+        file_size = os.path.getsize(pdf_path) if os.path.exists(pdf_path) else 0
+        meta = extraction["metadata"]
+
+        doc_record = DocumentRecord(
+            file_path=filename,
+            content_hash=content_hash,
+            title=meta.get("title", ""),
+            author=meta.get("author", ""),
+            page_count=int(meta.get("page_count", 0)),
+            file_size_bytes=file_size,
+        )
+        doc_id = db.upsert_document(doc_record)
+
+        for page_info in extraction["pages"]:
+            page_num = page_info["page_number"]
+            page_record = PageRecord(
+                document_id=doc_id,
+                page_number=page_num,
+                raw_text="",
+            )
+            page_id = db.upsert_page(page_record)
+            db.clear_tables_for_page(page_id)
+
+            for table_info in page_info["tables"]:
+                table_data = TableData(
+                    page_id=page_id,
+                    table_index=table_info["table_number"],
+                    headers=table_info["headers"],
+                    rows=[],
+                    table_type=table_info["table_type"],
+                )
+                table_id = db.insert_table(table_data)
+
+                # Insert cells with typed data
+                cells: list[list[CellData]] = []
+                for row in table_info["rows"]:
+                    cell_row: list[CellData] = []
+                    for cell in row:
+                        cell_row.append(CellData(
+                            value=cell["value"],
+                            data_type=cell["data_type"],
+                            numeric_value=cell["numeric_value"],
+                        ))
+                    cells.append(cell_row)
+                db.insert_cells_batch(table_id, cells)
+    finally:
+        db.close()
+
+
+def _extract_table_context(page, table_bbox: tuple) -> tuple[str, str]:
+    """Extract text immediately before and after a table on a page.
+
+    Looks at text above the table's top edge (context_before) and below
+    its bottom edge (context_after), limited to ~200 chars each.
+    """
+    page_text = page.extract_text() or ""
+    if not page_text:
+        return "", ""
+
+    # Use the table's bounding box to split text spatially.
+    # pdfplumber can crop by bbox: (x0, top, x1, bottom)
+    context_before = ""
+    context_after = ""
+
+    try:
+        # Text above the table
+        if table_bbox[1] > 5:
+            above = page.crop((0, 0, page.width, table_bbox[1]))
+            above_text = (above.extract_text() or "").strip()
+            if above_text:
+                # Take last ~200 chars (closest to table)
+                context_before = above_text[-200:].strip()
+
+        # Text below the table
+        if table_bbox[3] < page.height - 5:
+            below = page.crop((0, table_bbox[3], page.width, page.height))
+            below_text = (below.extract_text() or "").strip()
+            if below_text:
+                # Take first ~200 chars (closest to table)
+                context_after = below_text[:200].strip()
+    except Exception:
+        pass
+
+    return context_before, context_after
 
 
 def extract_all_tables(pdf_path: str) -> dict:
     """Extract all tables and numeric data from a PDF file.
 
-    Returns a dict with metadata, per-page tables, and a numeric data summary.
+    Returns a dict with metadata, per-page tables (with surrounding text
+    context), and a numeric data summary.
     """
     extractor = TableExtractor()
     typer = DataTyper()
@@ -90,6 +245,11 @@ def extract_all_tables(pdf_path: str) -> dict:
                             })
                     typed_rows.append(typed_cells)
 
+                # Extract surrounding text context
+                context_before, context_after = _extract_table_context(
+                    page, table.bbox,
+                )
+
                 page_tables.append({
                     "table_number": table_counter,
                     "headers": table.headers,
@@ -97,6 +257,8 @@ def extract_all_tables(pdf_path: str) -> dict:
                     "row_count": table.row_count,
                     "col_count": table.col_count,
                     "table_type": table.table_type,
+                    "context_before": context_before,
+                    "context_after": context_after,
                 })
 
             if page_tables:
@@ -284,7 +446,7 @@ def upload():
     try:
         extraction = extract_all_tables(upload_path)
         markdown = generate_markdown(file.filename, extraction)
-        csv_content = generate_csv(extraction)
+        legacy_csv_content = generate_csv(extraction)
 
         stem = Path(file.filename).stem
 
@@ -294,11 +456,41 @@ def upload():
         with open(md_path, "w", encoding="utf-8") as f:
             f.write(markdown)
 
-        # Save CSV output
-        csv_filename = stem + "_tables.csv"
+        # Save tidy CSV output (replaces legacy CSV as primary download)
+        csv_filename = stem + "_tidy.csv"
         csv_path = os.path.join(OUTPUT_FOLDER, f"{file_id}_{csv_filename}")
+        tidy_csv_content = generate_combined_csv(extraction, file.filename)
         with open(csv_path, "w", encoding="utf-8", newline="") as f:
-            f.write(csv_content)
+            f.write(tidy_csv_content)
+
+        # Save structured JSON
+        json_filename = stem + "_data.json"
+        json_path = os.path.join(OUTPUT_FOLDER, f"{file_id}_{json_filename}")
+        json_content = generate_json_export(extraction, file.filename)
+        with open(json_path, "w", encoding="utf-8") as f:
+            f.write(json_content)
+
+        # Save Excel workbook
+        xlsx_filename = stem + "_tables.xlsx"
+        xlsx_path = os.path.join(OUTPUT_FOLDER, f"{file_id}_{xlsx_filename}")
+        xlsx_content = generate_excel(extraction, file.filename)
+        with open(xlsx_path, "wb") as f:
+            f.write(xlsx_content)
+
+        # Save ZIP bundle with all formats
+        zip_filename = stem + "_export.zip"
+        zip_path = os.path.join(OUTPUT_FOLDER, f"{file_id}_{zip_filename}")
+        zip_content = generate_zip_bundle(
+            extraction, file.filename, markdown, legacy_csv_content,
+        )
+        with open(zip_path, "wb") as f:
+            f.write(zip_content)
+
+        # Persist to SQLite index for MCP server access
+        try:
+            _persist_to_index(upload_path, file.filename, extraction)
+        except Exception:
+            pass  # Non-critical — exports still work without the index
 
         return jsonify({
             "success": True,
@@ -306,12 +498,16 @@ def upload():
             "filename": file.filename,
             "md_filename": md_filename,
             "csv_filename": csv_filename,
+            "json_filename": json_filename,
+            "xlsx_filename": xlsx_filename,
+            "zip_filename": zip_filename,
             "total_tables": extraction["total_tables"],
             "total_numeric_values": extraction["total_numeric_values"],
             "page_count": extraction["metadata"].get("page_count", "0"),
             "markdown_preview": markdown,
             "tables": extraction["pages"],
             "numeric_data": extraction["numeric_data"],
+            "index_db_path": _get_index_db_path(),
         })
     except Exception as e:
         return jsonify({"error": f"Failed to process PDF: {e}"}), 500
@@ -333,10 +529,15 @@ def download(file_id: str, filename: str):
     if not os.path.exists(file_path):
         return jsonify({"error": "File not found"}), 404
 
-    if filename.endswith(".csv"):
-        mimetype = "text/csv"
-    else:
-        mimetype = "text/markdown"
+    mimetype_map = {
+        ".csv": "text/csv",
+        ".md": "text/markdown",
+        ".json": "application/json",
+        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ".zip": "application/zip",
+    }
+    ext = os.path.splitext(filename)[1].lower()
+    mimetype = mimetype_map.get(ext, "application/octet-stream")
 
     return send_file(
         file_path,
@@ -357,7 +558,9 @@ def main():
     args = parser.parse_args()
 
     _ensure_dirs()
+    _start_cleanup_thread()
     print(f"Starting PDF Table Extractor at http://{args.host}:{args.port}")
+    print(f"Output files expire after {FILE_TTL_SECONDS // 60} minutes")
     app.run(host=args.host, port=args.port, debug=args.debug)
 
 
