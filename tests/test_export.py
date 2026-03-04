@@ -15,6 +15,7 @@ from pdf_indexer.export import (
     generate_json_export,
     generate_excel,
     generate_zip_bundle,
+    generate_data_quality_report,
 )
 
 
@@ -103,8 +104,6 @@ class TestGenerateTableCsv:
         reader = csv.DictReader(io.StringIO(csv_out))
         rows = list(reader)
         assert rows[0]["Q3 2025"] == "12450000.0"
-        assert rows[0]["Q3 2025 (raw)"] == "$12,450,000"
-        assert rows[0]["Q3 2025 dtype"] == "currency"
 
     def test_text_columns_use_raw_value(self, sample_extraction):
         table = sample_extraction["pages"][0]["tables"][0]
@@ -112,7 +111,16 @@ class TestGenerateTableCsv:
         reader = csv.DictReader(io.StringIO(csv_out))
         rows = list(reader)
         assert rows[0]["Segment"] == "North America"
-        assert rows[0]["Segment dtype"] == "text"
+
+    def test_clean_columns_only(self, sample_extraction):
+        """Per-table CSV should only have the original column headers."""
+        table = sample_extraction["pages"][0]["tables"][0]
+        csv_out = generate_table_csv(table, 1, "test.pdf")
+        reader = csv.DictReader(io.StringIO(csv_out))
+        fieldnames = reader.fieldnames
+        assert fieldnames == ["Segment", "Q3 2025", "Growth"]
+        assert "dtype" not in " ".join(fieldnames)
+        assert "(raw)" not in " ".join(fieldnames)
 
     def test_no_section_markers(self, sample_extraction):
         table = sample_extraction["pages"][0]["tables"][0]
@@ -139,6 +147,7 @@ class TestGenerateTableCsv:
         reader = csv.reader(io.StringIO(csv_out))
         all_rows = list(reader)
         assert len(all_rows) == 3  # header + 2 data
+        assert len(all_rows[0]) == 3  # original 3 columns, no companions
         # All rows same column count
         assert all(len(r) == len(all_rows[0]) for r in all_rows)
 
@@ -273,16 +282,18 @@ class TestGenerateExcel:
 
         excel_bytes = generate_excel(sample_extraction, "test.pdf")
         wb = openpyxl.load_workbook(io.BytesIO(excel_bytes))
-        # Summary + 2 table sheets = 3
-        assert len(wb.sheetnames) == 3
+        # Summary + Data Quality + 2 table sheets = 4
+        assert len(wb.sheetnames) == 4
+        assert "Summary" in wb.sheetnames
+        assert "Data Quality" in wb.sheetnames
 
     def test_excel_numeric_values(self, sample_extraction):
         import openpyxl
 
         excel_bytes = generate_excel(sample_extraction, "test.pdf")
         wb = openpyxl.load_workbook(io.BytesIO(excel_bytes))
-        # First table sheet
-        ws = wb[wb.sheetnames[1]]
+        # First table sheet (after Summary and Data Quality)
+        ws = wb[wb.sheetnames[2]]
         # Row 2 (first data row), Col 2 (Q3 2025) should be numeric
         val = ws.cell(row=2, column=2).value
         assert isinstance(val, (int, float))
@@ -293,7 +304,8 @@ class TestGenerateExcel:
 
         excel_bytes = generate_excel(sample_extraction, "test.pdf")
         wb = openpyxl.load_workbook(io.BytesIO(excel_bytes))
-        ws = wb[wb.sheetnames[1]]
+        # First table sheet (after Summary and Data Quality)
+        ws = wb[wb.sheetnames[2]]
         # Row 2, Col 3 (Growth = 15.3%) should be stored as 0.153
         val = ws.cell(row=2, column=3).value
         assert abs(val - 0.153) < 0.0001
@@ -356,3 +368,60 @@ class TestGenerateZipBundle:
         json_name = [n for n in zf.namelist() if "data.json" in n][0]
         data = json.loads(zf.read(json_name))
         assert len(data["tables"]) == 2
+
+    def test_zip_contains_quality_report(self, sample_extraction):
+        zip_bytes = generate_zip_bundle(
+            sample_extraction, "report.pdf", "# Markdown", "a,b\n1,2",
+        )
+        zf = zipfile.ZipFile(io.BytesIO(zip_bytes))
+        names = zf.namelist()
+        assert any("data_quality.json" in n for n in names)
+        quality_name = [n for n in names if "data_quality.json" in n][0]
+        quality = json.loads(zf.read(quality_name))
+        assert "tables" in quality
+        assert "overall_quality" in quality
+
+
+# ---------------------------------------------------------------------------
+# Data quality report
+# ---------------------------------------------------------------------------
+
+
+class TestDataQualityReport:
+    def test_basic_structure(self, sample_extraction):
+        report = generate_data_quality_report(sample_extraction, "test.pdf")
+        assert report["source_file"] == "test.pdf"
+        assert report["total_tables"] == 2
+        assert "overall_quality" in report
+        assert len(report["tables"]) == 2
+
+    def test_column_stats(self, sample_extraction):
+        report = generate_data_quality_report(sample_extraction, "test.pdf")
+        table_1 = report["tables"][0]
+        assert len(table_1["column_stats"]) == 3
+        # Segment column is all text
+        seg = table_1["column_stats"][0]
+        assert seg["column_name"] == "Segment"
+        assert seg["dominant_type"] == "text"
+        assert seg["missing"] == 0
+
+    def test_numeric_stats(self, sample_extraction):
+        report = generate_data_quality_report(sample_extraction, "test.pdf")
+        table_1 = report["tables"][0]
+        q3_col = [c for c in table_1["column_stats"] if c["column_name"] == "Q3 2025"][0]
+        assert "min" in q3_col
+        assert "max" in q3_col
+        assert "mean" in q3_col
+        assert q3_col["min"] == 8750000.0
+        assert q3_col["max"] == 12450000.0
+
+    def test_empty_extraction(self, empty_extraction):
+        report = generate_data_quality_report(empty_extraction, "empty.pdf")
+        assert report["total_tables"] == 0
+        assert report["overall_quality"] == "good"
+
+    def test_json_includes_quality(self, sample_extraction):
+        json_out = generate_json_export(sample_extraction, "test.pdf")
+        data = json.loads(json_out)
+        assert "data_quality" in data
+        assert data["data_quality"]["total_tables"] == 2
